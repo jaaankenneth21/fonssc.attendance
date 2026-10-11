@@ -20,6 +20,11 @@ import checkPhoto from "../assets/check.png";
 const FACE_CHECK_REQUIRED = true;
 const ALLOW_WITHOUT_FACE_CHECK = true;
 
+// MIRROR_SELFIE = true shows the camera like a mirror (left is left) and
+// saves the photo the same way, so the selfie looks like the preview.
+// Set it to false for the normal, un-flipped camera.
+const MIRROR_SELFIE = true;
+
 // Tried in order. Your own files (public/mediapipe/...) come first so
 // mobile data and school Wi-Fi don't depend on other websites; the online
 // copies are the backup when those files are not there.
@@ -996,6 +1001,12 @@ function AttendancePage() {
       return;
     }
 
+    if (MIRROR_SELFIE) {
+      // Flip horizontally so the saved selfie matches the mirrored preview
+      context.translate(canvas.width, 0);
+      context.scale(-1, 1);
+    }
+
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     canvas.toBlob(
@@ -1283,6 +1294,7 @@ function AttendancePage() {
             playsInline
             muted
             className="camera-preview"
+            style={MIRROR_SELFIE ? { transform: "scaleX(-1)" } : undefined}
           />
 
           {FACE_CHECK_REQUIRED && (
