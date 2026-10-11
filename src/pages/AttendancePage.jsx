@@ -471,6 +471,95 @@ const blockedStyles = {
   },
 };
 
+// --------------------------------------------------
+// ANIMATED CAMERA (replaces the 📷 emoji)
+// The lens aperture closes and reopens like a shutter,
+// then the flash bursts. One 3s loop, all parts in sync.
+// --------------------------------------------------
+
+const cameraAnimCss = `
+.cam-svg { width: 72px; height: 60px; overflow: visible; }
+.cam-body { transform-box: fill-box; transform-origin: center; animation: cam-click 3s ease-in-out infinite; }
+.cam-aperture { transform-box: fill-box; transform-origin: center; animation: cam-lens 3s ease-in-out infinite; }
+.cam-glint { animation: cam-glint 3s ease-in-out infinite; }
+.cam-bulb { animation: cam-bulb 3s ease-in-out infinite; }
+.cam-burst { transform-box: fill-box; transform-origin: center; opacity: 0; animation: cam-burst 3s ease-out infinite; }
+.cam-rays { transform-box: fill-box; transform-origin: center; opacity: 0; animation: cam-rays 3s ease-out infinite; }
+
+@keyframes cam-lens {
+  0%, 52%  { transform: scale(1); }
+  60%      { transform: scale(0.15); }
+  66%      { transform: scale(1.2); }
+  76%, 100%{ transform: scale(1); }
+}
+@keyframes cam-click {
+  0%, 56%, 70%, 100% { transform: scale(1); }
+  62%                { transform: scale(0.96); }
+}
+@keyframes cam-glint {
+  0%, 55%, 100% { opacity: 0.85; }
+  62%           { opacity: 0; }
+}
+@keyframes cam-bulb {
+  0%, 58%, 100% { fill: #fff3c4; }
+  64%           { fill: #ffffff; }
+}
+@keyframes cam-burst {
+  0%, 60% { opacity: 0; transform: scale(0.3); }
+  64%     { opacity: 0.95; transform: scale(1); }
+  82%     { opacity: 0; transform: scale(5); }
+  100%    { opacity: 0; transform: scale(5); }
+}
+@keyframes cam-rays {
+  0%, 60% { opacity: 0; transform: scale(0.5) rotate(0deg); }
+  64%     { opacity: 1; transform: scale(1) rotate(10deg); }
+  80%, 100% { opacity: 0; transform: scale(1.6) rotate(25deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cam-body, .cam-aperture, .cam-glint, .cam-bulb, .cam-burst, .cam-rays { animation: none; }
+}
+`;
+
+function AnimatedCamera() {
+  return (
+    <>
+      <style>{cameraAnimCss}</style>
+
+      <svg className="cam-svg" viewBox="0 0 120 100" aria-hidden="true">
+        <g className="cam-body">
+          {/* top bump + flash housing */}
+          <rect x="38" y="8" width="30" height="18" rx="5" fill="#d9672a" />
+          <rect x="84" y="12" width="18" height="12" rx="3" fill="#d9672a" />
+          <rect className="cam-bulb" x="87" y="14" width="12" height="8" rx="2" fill="#fff3c4" />
+
+          {/* body */}
+          <rect x="8" y="22" width="104" height="70" rx="15" fill="#e8793b" />
+          <rect x="8" y="32" width="104" height="6" fill="#d9672a" opacity="0.5" />
+
+          {/* lens */}
+          <circle cx="60" cy="58" r="27" fill="#4a3a35" />
+          <circle cx="60" cy="58" r="21" fill="#2b2321" stroke="#ffd9c2" strokeWidth="2.5" />
+          <circle className="cam-aperture" cx="60" cy="58" r="13" fill="#7fb4ff" />
+          <circle cx="60" cy="58" r="6" fill="#1d3b73" opacity="0.55" />
+          <circle className="cam-glint" cx="54" cy="52" r="3.5" fill="#fff" />
+
+          {/* shutter button */}
+          <circle cx="24" cy="32" r="3.5" fill="#ffa3c4" />
+        </g>
+
+        {/* flash effects (sit on top of the body, centred on the bulb) */}
+        <circle className="cam-burst" cx="93" cy="18" r="8" fill="#fff6d6" />
+        <g className="cam-rays" stroke="#ffd45e" strokeWidth="2.5" strokeLinecap="round">
+          <line x1="93" y1="2" x2="93" y2="-4" />
+          <line x1="106" y1="6" x2="111" y2="1" />
+          <line x1="112" y1="18" x2="118" y2="18" />
+          <line x1="80" y1="6" x2="75" y2="1" />
+        </g>
+      </svg>
+    </>
+  );
+}
+
 // "Salleh, John Kenneth" -> "John"
 function getFirstName(fullName) {
   const given = (fullName || "").split(",")[1] || "";
@@ -1370,7 +1459,7 @@ function AttendancePage() {
 
             <p className="instruction">Enter your username to continue.</p>
 
-            <label htmlFor="studentId">Username</label>
+            <label htmlFor="studentId">Username:</label>
 
             <input
               id="studentId"
@@ -1441,7 +1530,9 @@ function AttendancePage() {
 
                 {!cameraOpen && !photo && (
                   <>
-                    <div className="camera-placeholder">📷</div>
+                    <div className="camera-placeholder">
+                      <AnimatedCamera />
+                    </div>
 
                     <button
                       className="primary-button"
@@ -1506,7 +1597,9 @@ function AttendancePage() {
 
                 {!cameraOpen && !photo && (
                   <>
-                    <div className="camera-placeholder">📷</div>
+                    <div className="camera-placeholder">
+                      <AnimatedCamera />
+                    </div>
 
                     <p>Take a selfie to verify your Time Out.</p>
 

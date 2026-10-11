@@ -1,135 +1,354 @@
 /* =========================================================
-   ADMIN LOGIN — COMPLETE DESIGN
-   Colorway: dark = #D470A2 (rose)  |  light = #ffdab9 (peach)
+   ADMIN LOGIN — FULL DESIGN
+   Palette (unchanged): rose #D470A2 | hover #a95a82
+   peach #ffdab9 | cream #fdf5ee | borders #ffe4c9 / #f0d9c4
+   This file replaces your previous admin.css entirely.
    ========================================================= */
 
 .admin-login-page {
+  --rose: #d470a2;
+  --rose-dark: #a95a82;
+  --peach: #ffdab9;
+  --cream: #fdf5ee;
+  --border-soft: #ffe4c9;
+  --border: #f0d9c4;
+  --ink: #2b1a20;
+  --ink-2: #3a2620;
+  --muted: #8a7671;
+  --placeholder: #b7a79d;
+
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
+  padding: 24px;
 
   display: flex;
   align-items: center;
   justify-content: center;
 
-  padding: 24px;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
 
   background:
-    radial-gradient(
-      circle at top left,
-      rgba(212, 112, 162, 0.08),
-      transparent 35%
-    ),
-    #fdf5ee;
+    radial-gradient(circle at top left, rgba(212, 112, 162, 0.12), transparent 40%),
+    radial-gradient(circle at bottom right, rgba(255, 218, 185, 0.6), transparent 45%),
+    var(--cream);
+
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 
+/* ---------- Scoped reset ---------- */
+
+.admin-login-page *,
+.admin-login-page *::before,
+.admin-login-page *::after {
+  box-sizing: border-box;
+}
+
+.admin-login-page button,
+.admin-login-page input {
+  font-family: inherit;
+  margin: 0;
+}
+
+/* Hide Edge/IE's built-in reveal icon so it doesn't double up with ours */
+.admin-login-page input::-ms-reveal,
+.admin-login-page input::-ms-clear {
+  display: none;
+}
 
 /* =========================================================
-   LOGIN CARD
+   BACKGROUND
    ========================================================= */
 
-.admin-login-card {
-  width: 100%;
-  max-width: 430px;
-
-  padding: 40px 36px 34px;
-
-  background: #ffffff;
-
-  border: 1px solid #ffe4c9;
-
-  border-radius: 24px;
-
-  box-shadow:
-    0 20px 60px rgba(212, 112, 162, 0.10);
-
-  position: relative;
-}
-
-
-/* small rose line at top */
-
-.admin-login-card::before {
-  content: "";
-
+.admin-login-blob {
   position: absolute;
-
-  top: 0;
-  left: 32px;
-  right: 32px;
-
-  height: 4px;
-
-  border-radius: 0 0 10px 10px;
-
-  background: #d470a2;
+  z-index: -3;
+  border-radius: 50%;
+  filter: blur(64px);
+  pointer-events: none;
+  animation: admin-float 14s ease-in-out infinite;
 }
 
+.admin-login-blob--one {
+  width: 360px;
+  height: 360px;
+  top: -120px;
+  left: -100px;
+  background: rgba(212, 112, 162, 0.26);
+}
+
+.admin-login-blob--two {
+  width: 400px;
+  height: 400px;
+  bottom: -150px;
+  right: -120px;
+  background: rgba(255, 218, 185, 0.85);
+  animation-delay: -7s;
+}
+
+@keyframes admin-float {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(28px, 20px, 0) scale(1.08); }
+}
+
+/* Faint dotted grid, fading toward the edges */
+.admin-login-grid {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+
+  background-image: radial-gradient(rgba(212, 112, 162, 0.22) 1px, transparent 1.5px);
+  background-size: 26px 26px;
+
+  -webkit-mask-image: radial-gradient(circle at center, #000 0%, transparent 72%);
+  mask-image: radial-gradient(circle at center, #000 0%, transparent 72%);
+}
+
+/* Floating particles */
+.admin-login-particles {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.admin-particle {
+  position: absolute;
+  left: var(--x);
+  bottom: -30px;
+  width: var(--s);
+  height: var(--s);
+  border-radius: 50%;
+
+  background: radial-gradient(circle at 30% 30%, #ffffff, var(--rose));
+  opacity: 0;
+
+  animation: admin-particle var(--d) linear infinite;
+  animation-delay: var(--delay);
+}
+
+.admin-particle--ring {
+  background: transparent;
+  border: 2px solid var(--rose);
+}
+
+.admin-particle:nth-child(3n) {
+  background: radial-gradient(circle at 30% 30%, #ffffff, var(--peach));
+}
+
+.admin-particle--ring:nth-child(3n) {
+  background: transparent;
+  border-color: var(--peach);
+}
+
+@keyframes admin-particle {
+  0% { transform: translate3d(0, 0, 0) scale(0.6); opacity: 0; }
+  12% { opacity: 0.55; }
+  50% { transform: translate3d(22px, -50vh, 0) scale(1); }
+  88% { opacity: 0.4; }
+  100% { transform: translate3d(-18px, -105vh, 0) scale(1.15); opacity: 0; }
+}
 
 /* =========================================================
-   LOGO
+   STAGE (tilt) + CARD
+   ========================================================= */
+
+.admin-login-stage {
+  --mx: 50%;
+  --my: 0%;
+  --rx: 0deg;
+  --ry: 0deg;
+
+  width: 100%;
+  max-width: 430px;
+}
+
+.admin-login-card {
+  position: relative;
+  width: 100%;
+  padding: 44px 36px 30px;
+
+  background: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(14px) saturate(1.1);
+  backdrop-filter: blur(14px) saturate(1.1);
+
+  border: 1px solid var(--border-soft);
+  border-radius: 28px;
+
+  box-shadow:
+    0 1px 2px rgba(212, 112, 162, 0.06),
+    0 28px 70px rgba(212, 112, 162, 0.18);
+
+}
+
+.admin-login-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Shimmering top accent bar */
+.admin-login-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 34px;
+  right: 34px;
+  height: 4px;
+  border-radius: 0 0 10px 10px;
+
+  background: linear-gradient(
+    90deg,
+    var(--rose),
+    var(--peach),
+    var(--rose),
+    var(--rose-dark),
+    var(--rose)
+  );
+  background-size: 100% 100%;
+}
+
+/* Staggered entrance for everything inside the card */
+.admin-reveal {
+  animation: admin-rise 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 160ms);
+}
+
+@keyframes admin-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* =========================================================
+   LOGO — circle, full size, single gradient edge
    ========================================================= */
 
 .admin-login-logo {
-  width: 96px;
-  height: 96px;
-
-  margin: 4px auto 22px;
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
+  width: 104px;
+  height: 104px;
+  margin: 6px auto 36px;
 }
 
-.admin-login-logo img {
+/* Soft floor shadow so the logo looks like it floats */
+.admin-login-logo::after {
+  content: "";
+  position: absolute;
+  left: 16%;
+  right: 16%;
+  bottom: -20px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(212, 112, 162, 0.4),
+    transparent 72%
+  );
+  filter: blur(4px);
+  transition: transform 0.35s ease, opacity 0.35s ease;
+}
+
+.admin-logo-disc {
+  position: relative;
+  z-index: 1;
+
   width: 100%;
   height: 100%;
+  padding: 4px;
+  border-radius: 50%;
 
-  object-fit: contain;
+  /* the only "ring": a thin peach-to-rose edge hugging the logo */
+  background: linear-gradient(
+    145deg,
+    var(--peach) 0%,
+    var(--rose) 55%,
+    var(--rose-dark) 100%
+  );
+
+  box-shadow:
+    0 16px 30px -10px rgba(212, 112, 162, 0.55),
+    0 2px 6px rgba(212, 112, 162, 0.2);
+
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.35s ease;
 }
 
+.admin-logo-disc img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: contain;
+  background: #ffffff;
+}
+
+.admin-login-stage:hover .admin-logo-disc {
+  transform: translateY(-4px);
+  box-shadow:
+    0 22px 36px -10px rgba(212, 112, 162, 0.6),
+    0 2px 6px rgba(212, 112, 162, 0.2);
+}
+
+.admin-login-stage:hover .admin-login-logo::after {
+  transform: scale(0.88);
+  opacity: 0.8;
+}
 
 /* =========================================================
-   TITLE
+   HEADING
    ========================================================= */
 
 .admin-login-heading {
   text-align: center;
-
   margin-bottom: 30px;
+}
+
+.admin-login-eyebrow {
+  display: inline-block;
+  margin-bottom: 14px;
+  padding: 5px 13px;
+
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: #fff6ee;
+  color: var(--rose-dark);
+
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
 }
 
 .admin-login-heading h1 {
   margin: 0;
 
-  color: #2b1a20;
-
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-
-  font-size: 30px;
-
+  font-size: 31px;
   font-weight: 750;
-
   line-height: 1.15;
+  letter-spacing: -0.6px;
 
-  letter-spacing: -0.5px;
+  color: var(--ink);
+  background: linear-gradient(100deg, var(--ink) 30%, var(--rose-dark) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .admin-login-heading p {
-  margin: 9px 0 0;
-
-  color: #8a7671;
-
+  margin: 10px auto 0;
+  max-width: 300px;
+  color: var(--muted);
   font-size: 14px;
-
-  line-height: 1.5;
+  line-height: 1.55;
 }
-
 
 /* =========================================================
    FORM
@@ -139,307 +358,418 @@
   width: 100%;
 }
 
-
-/* =========================================================
-   FORM GROUP
-   ========================================================= */
-
 .admin-form-group {
   width: 100%;
-
-  margin-bottom: 19px;
-
+  margin-bottom: 18px;
   text-align: left;
 }
 
 .admin-form-group label {
   display: block;
-
   margin-bottom: 8px;
-
-  color: #3a2620;
-
-  font-size: 14px;
-
+  color: var(--ink-2);
+  font-size: 13.5px;
   font-weight: 650;
-
+  letter-spacing: 0.1px;
   text-align: left;
+  transition: color 0.18s ease;
 }
 
+.admin-form-group:focus-within label {
+  color: var(--rose-dark);
+}
 
-/* =========================================================
-   INPUT
-   ========================================================= */
+.admin-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
 
-.admin-form-group input {
+.admin-input-icon {
+  position: absolute;
+  left: 15px;
+  display: flex;
+  color: var(--placeholder);
+  pointer-events: none;
+  transition: color 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.admin-input-wrap:focus-within .admin-input-icon {
+  color: var(--rose);
+  transform: scale(1.15);
+}
+
+.admin-form-group .admin-input-wrap input {
   display: block;
-
   width: 100%;
+  height: 52px;
+  padding: 0 46px 0 44px;
 
-  height: 50px;
-
-  padding: 0 15px;
-
-  border: 1px solid #f0d9c4;
-
-  border-radius: 12px;
-
+  border: 1px solid var(--border);
+  border-radius: 14px;
   outline: none;
 
   background: #ffffff;
-
-  color: #2b1a20;
-
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-
+  color: var(--ink);
   font-size: 15px;
-
   text-align: left;
 
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    background 0.15s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease,
+    background 0.18s ease, transform 0.18s ease;
 }
 
-.admin-form-group input::placeholder {
-  color: #b7a79d;
+.admin-form-group .admin-input-wrap input::placeholder {
+  color: var(--placeholder);
 }
 
-.admin-form-group input:hover {
-  border-color: #ffdab9;
+.admin-form-group .admin-input-wrap input:hover {
+  border-color: var(--peach);
 }
 
-.admin-form-group input:focus {
-  border-color: #d470a2;
-
-  background: #ffffff;
-
+.admin-form-group .admin-input-wrap input:focus {
+  border-color: var(--rose);
   box-shadow:
-    0 0 0 4px rgba(212, 112, 162, 0.10);
+    0 0 0 4px rgba(212, 112, 162, 0.13),
+    0 8px 20px rgba(212, 112, 162, 0.1);
+  transform: translateY(-1px);
 }
 
-.admin-form-group input:disabled {
-  background: #fdf5ee;
+.admin-form-group .admin-input-wrap input[aria-invalid="true"] {
+  border-color: #e3a4a4;
+}
 
+.admin-form-group .admin-input-wrap input:disabled {
+  background: var(--cream);
   cursor: not-allowed;
 }
 
-
-/* =========================================================
-   ERROR
-   ========================================================= */
-
-.admin-login-error {
-  margin: 2px 0 16px;
-
-  padding: 12px 14px;
-
-  border: 1px solid #f1cccc;
-
-  border-radius: 11px;
-
-  background: #fff3f3;
-
-  color: #a12b2b;
-
-  font-size: 13px;
-
-  line-height: 1.4;
+/* Keep browser autofill on-palette */
+.admin-form-group .admin-input-wrap input:-webkit-autofill {
+  -webkit-text-fill-color: var(--ink);
+  box-shadow: 0 0 0 100px #fff6ee inset;
 }
 
+/* ---------- Password toggle ---------- */
 
-/* =========================================================
-   SIGN IN
-   ========================================================= */
+.admin-password-toggle {
+  position: absolute;
+  right: 8px;
+  width: 36px;
+  height: 36px;
 
-.admin-sign-in-button {
   display: flex;
-
   align-items: center;
   justify-content: center;
 
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--placeholder);
+  cursor: pointer;
+
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.admin-password-toggle:hover {
+  background: #fff6ee;
+  color: var(--rose);
+}
+
+.admin-password-toggle:active {
+  transform: scale(0.9);
+}
+
+.admin-password-toggle:focus-visible {
+  outline: 2px solid var(--rose);
+  outline-offset: 1px;
+}
+
+.admin-password-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---------- Caps lock hint ---------- */
+
+.admin-caps-hint {
+  margin: 8px 0 0;
+  color: var(--rose-dark);
+  font-size: 12.5px;
+  font-weight: 600;
+  animation: admin-rise 0.3s ease both;
+}
+
+/* ---------- Error ---------- */
+
+.admin-login-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+
+  margin: 2px 0 16px;
+  padding: 12px 14px;
+
+  border: 1px solid #f1cccc;
+  border-radius: 12px;
+  background: #fff3f3;
+  color: #a12b2b;
+
+  font-size: 13px;
+  line-height: 1.45;
+
+  animation: admin-shake 0.45s ease;
+}
+
+.admin-login-error svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+@keyframes admin-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+
+/* =========================================================
+   SIGN IN BUTTON
+   ========================================================= */
+
+.admin-sign-in-button {
+  position: relative;
+  overflow: hidden;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+
   width: 100%;
-  height: 50px;
-
-  margin-top: 7px;
-
+  height: 54px;
+  margin-top: 8px;
   padding: 0 18px;
 
   border: none;
+  border-radius: 14px;
 
-  border-radius: 12px;
-
-  background: #d470a2;
-
+  background: linear-gradient(180deg, var(--rose), #c9649a);
   color: #ffffff;
 
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-
   font-size: 15px;
-
   font-weight: 700;
-
+  letter-spacing: 0.3px;
   cursor: pointer;
 
   box-shadow:
-    0 6px 16px rgba(212, 112, 162, 0.18);
+    0 10px 24px rgba(212, 112, 162, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 
-  transition:
-    background 0.15s ease,
-    transform 0.1s ease,
-    box-shadow 0.15s ease;
+  transition: background 0.18s ease, transform 0.15s ease,
+    box-shadow 0.18s ease;
 }
 
-.admin-sign-in-button:hover {
-  background: #a95a82;
+/* Light sweep on hover */
+.admin-sign-in-button::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 40%;
 
+  background: linear-gradient(
+    100deg,
+    transparent,
+    rgba(255, 255, 255, 0.45),
+    transparent
+  );
+  transform: skewX(-20deg);
+  pointer-events: none;
+}
+
+.admin-sign-in-button:hover:not(:disabled)::after {
+  animation: admin-sweep 0.9s ease;
+}
+
+@keyframes admin-sweep {
+  to { left: 130%; }
+}
+
+.admin-sign-in-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #bf6393, var(--rose-dark));
+  transform: translateY(-2px);
   box-shadow:
-    0 8px 20px rgba(212, 112, 162, 0.23);
+    0 16px 32px rgba(212, 112, 162, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
-.admin-sign-in-button:active {
+.admin-sign-in-button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
+.admin-sign-in-button:focus-visible {
+  outline: 3px solid rgba(212, 112, 162, 0.35);
+  outline-offset: 3px;
+}
+
 .admin-sign-in-button:disabled {
-  opacity: 0.65;
-
+  opacity: 0.78;
   cursor: not-allowed;
-
   box-shadow: none;
 }
 
+.admin-button-arrow {
+  display: flex;
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.admin-sign-in-button:hover:not(:disabled) .admin-button-arrow {
+  transform: translateX(5px);
+}
+
+.admin-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: admin-spin 0.7s linear infinite;
+}
+
+@keyframes admin-spin {
+  to { transform: rotate(360deg); }
+}
 
 /* =========================================================
-   BACK BUTTON
+   FOOTER NOTE
+   ========================================================= */
+
+.admin-login-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+
+  margin: 24px 0 0;
+  padding-top: 18px;
+
+  border-top: 1px dashed var(--border);
+  color: var(--placeholder);
+  font-size: 12.5px;
+  letter-spacing: 0.2px;
+}
+
+.admin-login-footer svg {
+  color: var(--rose);
+  opacity: 0.8;
+}
+
+/* =========================================================
+   BACK BUTTON (kept from your original CSS)
    ========================================================= */
 
 .admin-back-button {
   display: flex;
-
   align-items: center;
   justify-content: center;
 
   width: 100%;
   height: 46px;
-
   margin-top: 12px;
-
   padding: 0 16px;
 
-  border: 1px solid #f0d9c4;
-
+  border: 1px solid var(--border);
   border-radius: 12px;
-
   background: #ffffff;
-
   color: #6b564f;
 
-  font-family:
-    Inter,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
-
   font-size: 14px;
-
   font-weight: 600;
-
   cursor: pointer;
 
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease,
+  transition: background 0.15s ease, border-color 0.15s ease,
     color 0.15s ease;
 }
 
 .admin-back-button:hover {
   background: #fff6ee;
-
-  border-color: #ffdab9;
-
-  color: #d470a2;
+  border-color: var(--peach);
+  color: var(--rose);
 }
 
 .admin-back-button:disabled {
   opacity: 0.6;
-
   cursor: not-allowed;
 }
 
-
 /* =========================================================
-   MOBILE
+   RESPONSIVE
    ========================================================= */
 
 @media (max-width: 600px) {
-
-  .admin-login-page {
-    padding: 16px;
-  }
+  .admin-login-page { padding: 16px; }
 
   .admin-login-card {
-    max-width: 430px;
-
-    padding: 34px 22px 26px;
-
-    border-radius: 20px;
+    padding: 36px 22px 24px;
+    border-radius: 24px;
   }
 
-  .admin-login-card::before {
-    left: 24px;
-    right: 24px;
-  }
+  .admin-login-card::before { left: 26px; right: 26px; }
 
   .admin-login-logo {
-    width: 84px;
-    height: 84px;
-
-    margin-bottom: 19px;
+    width: 92px;
+    height: 92px;
+    margin: 8px auto 28px;
   }
 
-  .admin-login-heading h1 {
-    font-size: 27px;
-  }
-
-  .admin-login-heading {
-    margin-bottom: 26px;
-  }
-
+  .admin-login-heading { margin-bottom: 26px; }
+  .admin-login-heading h1 { font-size: 28px; }
 }
 
+@media (max-width: 380px) {
+  .admin-login-page { padding: 12px; }
+  .admin-login-card { padding: 32px 18px 20px; }
+  .admin-login-heading h1 { font-size: 26px; }
+}
+
+/* Short landscape screens: don't center-clip the card */
+@media (max-height: 700px) {
+  .admin-login-page { align-items: flex-start; }
+}
+
+/* Touch devices: no tilt, no hover-only spotlight */
+@media (hover: none) {
+  .admin-login-stage { transform: none; }
+  .admin-login-card::after { display: none; }
+}
 
 /* =========================================================
-   SMALL PHONES
+   REDUCED MOTION
    ========================================================= */
 
-@media (max-width: 380px) {
-
-  .admin-login-page {
-    padding: 12px;
+@media (prefers-reduced-motion: reduce) {
+  .admin-login-card,
+  .admin-reveal,
+  .admin-login-blob,
+  .admin-particle,
+  .admin-login-card::before,
+  .admin-login-error,
+  .admin-caps-hint {
+    animation: none;
   }
 
-  .admin-login-card {
-    padding: 30px 18px 22px;
-  }
+  .admin-login-stage { transform: none; }
 
-  .admin-login-heading h1 {
-    font-size: 25px;
-  }
+  .admin-particle { display: none; }
 
+  .admin-spinner { animation-duration: 1.4s; }
+
+  .admin-sign-in-button,
+  .admin-button-arrow,
+  .admin-input-icon,
+  .admin-form-group .admin-input-wrap input {
+    transition: none;
+  }
 }
