@@ -1,4 +1,4 @@
-import { HashRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import AttendancePage from "./pages/AttendancePage";
 import AdminLogin from "./pages/AdminLogin";
@@ -21,7 +21,7 @@ function ProtectedAdminRoute({ children }) {
 
 function App() {
   return (
-    <HashRouter>
+    <BrowserRouter>
       <Routes>
 
         {/* Student Attendance */}
@@ -83,7 +83,7 @@ function App() {
         />
 
       </Routes>
-    </HashRouter>
+    </BrowserRouter>
   );
 }
 
