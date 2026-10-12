@@ -20,6 +20,10 @@ import checkPhoto from "../assets/check.png";
 const FACE_CHECK_REQUIRED = true;
 const ALLOW_WITHOUT_FACE_CHECK = true;
 
+// NEW: Time Out clicked before this many minutes since Time In
+// shows an "Are you sure?" popup. At or after it, no popup.
+const EARLY_TIMEOUT_MINUTES = 30;
+
 // MIRROR_SELFIE = true shows the camera like a mirror (left is left) and
 // saves the photo the same way, so the selfie looks like the preview.
 // Set it to false for the normal, un-flipped camera.
@@ -52,8 +56,9 @@ function loadFaceLandmarker() {
         baseOptions: { modelAssetPath: source.model, delegate },
         runningMode: "VIDEO",
         numFaces: 2,
-        minFaceDetectionConfidence: 0.6,
-        minFacePresenceConfidence: 0.6,
+        // Lower than before so smaller / farther faces are still picked up
+        minFaceDetectionConfidence: 0.4,
+        minFacePresenceConfidence: 0.4,
       });
 
       try {
@@ -136,7 +141,9 @@ function checkFace(landmarker, video) {
 
   const faceHeight = maxY - minY;
 
-  if (faceHeight < 0.3) {
+  // Was 0.3 (face had to be close). 0.08 accepts a face about 1 meter
+  // or a bit more away; only a tiny, far-off face is rejected.
+  if (faceHeight < 0.08) {
     return { ok: false, text: "Move a little closer to the camera." };
   }
 
@@ -147,19 +154,24 @@ function checkFace(landmarker, video) {
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
 
-  if (centerX < 0.3 || centerX > 0.7 || centerY < 0.25 || centerY > 0.75) {
-    return { ok: false, text: "Center your face in the frame." };
+  // Wider area than before, so the face doesn't have to be dead center
+  if (centerX < 0.15 || centerX > 0.85 || centerY < 0.1 || centerY > 0.9) {
+    return { ok: false, text: "Keep your face inside the frame." };
   }
 
-  // Nose position between the left and right cheek = facing the camera
+  // Nose position between the left and right cheek.
+  // 0.5 = straight on. Was 0.3 - 0.7; now 0.15 - 0.85 so a slight side
+  // view is fine as long as eyes, nose and mouth are still visible
+  // (checked above). A full side profile is still rejected.
   const leftCheek = points[234];
   const rightCheek = points[454];
   const nose = points[1];
 
-  const turn = (nose.x - leftCheek.x) / (rightCheek.x - leftCheek.x);
+  const faceWidth = rightCheek.x - leftCheek.x;
+  const turn = faceWidth === 0 ? 0 : (nose.x - leftCheek.x) / faceWidth;
 
-  if (turn < 0.3 || turn > 0.7) {
-    return { ok: false, text: "Look straight at the camera." };
+  if (turn < 0.15 || turn > 0.85) {
+    return { ok: false, text: "Turn a little more toward the camera." };
   }
 
   return { ok: true, text: "Face detected. Hold still and capture." };
@@ -448,6 +460,162 @@ function PrivacyNotice({ consentGiven, agreed, onAgreeChange, onAccept, onClose 
   );
 }
 
+// --------------------------------------------------
+// NEW: EARLY TIME OUT WARNING
+// Shown when a student taps Take Selfie & Time Out before
+// EARLY_TIMEOUT_MINUTES have passed since their Time In.
+// The 30-minute limit is intentionally NOT shown to students.
+// --------------------------------------------------
+
+const earlyWarningCss = `
+@keyframes early-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes early-pop {
+  from { opacity: 0; transform: translateY(14px) scale(0.94); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes early-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(23, 26, 25, 0.28); }
+  50%      { box-shadow: 0 0 0 12px rgba(23, 26, 25, 0); }
+}
+@keyframes early-hand { to { transform: rotate(360deg); } }
+.early-hand { transform-origin: 12px 12px; animation: early-hand 6s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .early-overlay, .early-card, .early-icon, .early-hand { animation: none !important; }
+}
+`;
+
+const earlyWarningStyles = {
+  card: {
+    width: "100%",
+    maxWidth: 380,
+    padding: "32px 24px 24px",
+    textAlign: "center",
+    background: "#ffffff",
+    borderRadius: 28,
+    boxShadow: "0 30px 70px -20px rgba(0, 0, 0, 0.5)",
+    animation: "early-pop 0.24s ease-out",
+  },
+  icon: {
+    width: 72,
+    height: 72,
+    margin: "0 auto 16px",
+    display: "grid",
+    placeItems: "center",
+    borderRadius: "50%",
+    background: "#171a19",
+    animation: "early-ring 2s ease-in-out infinite",
+  },
+  title: {
+    margin: "0 0 6px",
+    fontSize: 22,
+    fontWeight: 800,
+    color: "#171a19",
+  },
+  text: { margin: 0, fontSize: 14.5, lineHeight: 1.5, color: "#5f6663" },
+  stat: {
+    margin: "20px 0 24px",
+    padding: "18px 18px 16px",
+    background: "#f6f6f6",
+    border: "1px solid #e8e8e8",
+    borderRadius: 18,
+  },
+  statValue: {
+    display: "block",
+    fontSize: 44,
+    lineHeight: 1,
+    fontWeight: 800,
+    letterSpacing: "-0.02em",
+    color: "#171a19",
+  },
+  statLabel: {
+    display: "block",
+    margin: "6px 0 0",
+    fontSize: 13,
+    color: "#5f6663",
+  },
+  actions: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
+  },
+  button: { width: "100%", margin: 0 },
+};
+
+function EarlyTimeOutWarning({ minutes, onCancel, onContinue }) {
+  const value = minutes < 1 ? "< 1" : String(minutes);
+  const unit = minutes <= 1 ? "minute" : "minutes";
+
+  return createPortal(
+    <div
+      className="early-overlay"
+      style={{
+        ...noticeStyles.overlay,
+        background: "rgba(0, 0, 0, 0.55)",
+        animation: "early-fade 0.18s ease-out",
+      }}
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="early-timeout-title"
+    >
+      <style>{earlyWarningCss}</style>
+
+      <div className="early-card" style={earlyWarningStyles.card}>
+        <div className="early-icon" style={earlyWarningStyles.icon}>
+          <svg
+            width="34"
+            height="34"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#ffffff"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path className="early-hand" d="M12 12V6.5" />
+            <path d="M12 12l3.5 2" />
+          </svg>
+        </div>
+
+        <h2 id="early-timeout-title" style={earlyWarningStyles.title}>
+          Time out already?
+        </h2>
+
+        <p style={earlyWarningStyles.text}>
+          Are you sure you want to time out?
+        </p>
+
+        <div style={earlyWarningStyles.stat}>
+          <span style={earlyWarningStyles.statValue}>{value}</span>
+          <span style={earlyWarningStyles.statLabel}>
+            {unit} since you timed in
+          </span>
+        </div>
+
+        <div style={earlyWarningStyles.actions}>
+          <button
+            className="secondary-button"
+            style={earlyWarningStyles.button}
+            onClick={onCancel}
+          >
+            No, go back
+          </button>
+
+          <button
+            className="primary-button"
+            style={earlyWarningStyles.button}
+            onClick={onContinue}
+          >
+            Yes, time out
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 const blockedStyles = {
   icon: {
     width: 56,
@@ -617,6 +785,10 @@ function AttendancePage() {
   // NEW: student found, but their year level is not in this session
   const [notAllowed, setNotAllowed] = useState(null);
 
+  // NEW: minutes since Time In, set when the early Time Out popup is open.
+  // null = popup closed
+  const [earlyTimeOutMinutes, setEarlyTimeOutMinutes] = useState(null);
+
   // NEW: privacy notice, remembered per device
   const [consentGiven, setConsentGiven] = useState(hasStoredConsent);
   const [showNotice, setShowNotice] = useState(false);
@@ -762,6 +934,7 @@ function AttendancePage() {
     setCameraOpen(false);
     setCameraLoading(false);
     setCameraMode(null);
+    setEarlyTimeOutMinutes(null);
   }
 
   // --------------------------------------------------
@@ -934,6 +1107,38 @@ function AttendancePage() {
       if (timer) clearInterval(timer);
     };
   }, [cameraOpen]);
+
+  // --------------------------------------------------
+  // NEW: "TAKE SELFIE & TIME OUT" BUTTON HANDLER
+  // If less than EARLY_TIMEOUT_MINUTES have passed since Time In,
+  // ask "Are you sure?" first. At 30 minutes or more there is no
+  // popup and the camera opens as usual.
+  // --------------------------------------------------
+
+  function handleTimeOutClick() {
+    if (todayAttendance?.time_in) {
+      const timeIn = new Date(todayAttendance.time_in).getTime();
+
+      if (!Number.isNaN(timeIn)) {
+        const elapsedMinutes = Math.max(
+          0,
+          Math.floor((Date.now() - timeIn) / 60000)
+        );
+
+        if (elapsedMinutes < EARLY_TIMEOUT_MINUTES) {
+          setEarlyTimeOutMinutes(elapsedMinutes);
+          return;
+        }
+      }
+    }
+
+    openCamera("time_out");
+  }
+
+  function continueEarlyTimeOut() {
+    setEarlyTimeOutMinutes(null);
+    openCamera("time_out");
+  }
 
   // --------------------------------------------------
   // CAPTURE PHOTO
@@ -1348,6 +1553,14 @@ function AttendancePage() {
         />
       )}
 
+      {earlyTimeOutMinutes !== null && (
+        <EarlyTimeOutWarning
+          minutes={earlyTimeOutMinutes}
+          onCancel={() => setEarlyTimeOutMinutes(null)}
+          onContinue={continueEarlyTimeOut}
+        />
+      )}
+
       <header className="attendance-header">
         <div className="school-logo">✔</div>
         <div>
@@ -1617,7 +1830,7 @@ function AttendancePage() {
 
                     <button
                       className="primary-button"
-                      onClick={() => openCamera("time_out")}
+                      onClick={handleTimeOutClick}
                       disabled={cameraLoading || loading}
                     >
                       {cameraLoading

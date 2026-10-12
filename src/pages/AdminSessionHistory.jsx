@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabase";
 import AdminSidebar from "./AdminSidebar";
 import "./admin-dashboard.css";
@@ -12,6 +13,16 @@ import "./AdminSessionHistory.css";
      attendance_programs  -> sessions the admin started/ended
      attendance           -> linked by attendance.program_id
      students             -> student_id, full_name, year_level, section
+
+   Every session has three buttons (Present / Timed in only / Absent).
+   Clicking one opens that session's list; clicking it again closes it.
+
+     1. Present        -> timed in AND timed out
+     2. Timed in only  -> timed in, but never timed out
+     3. Absent         -> eligible students with no attendance at all.
+                          Only filled in AFTER the session has ended.
+
+   Excel export has one sheet per category, sorted by year level.
 
    Attendance recorded BEFORE the Start/End Session feature has
    program_id = null, so it doesn't belong to any session and
@@ -167,11 +178,6 @@ function formatDuration(start, end) {
   return m ? `${h} h ${m} min` : `${h} h`;
 }
 
-function csvEscape(v) {
-  const s = String(v ?? "");
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
 /* "open" in the DB but past its deadline is effectively over */
 function effectiveStatus(p) {
   if (p.status === "open" && p.deadline && new Date(p.deadline) < new Date()) {
@@ -186,6 +192,160 @@ const STATUS_LABEL = {
   closed: "Ended",
 };
 
+/* Lowercase + trimmed, so "1st Year" matches "1st year " */
+const normalize = (v) => String(v ?? "").trim().toLowerCase();
+
+/* Sort by year level (1st, 2nd, 10th...) then by name */
+function byYearThenName(a, b) {
+  const yearA = a?.year_level || "";
+  const yearB = b?.year_level || "";
+
+  return (
+    yearA.localeCompare(yearB, undefined, { numeric: true }) ||
+    (a?.full_name || "").localeCompare(b?.full_name || "")
+  );
+}
+
+/* =========================================================
+   SECTION TABLE (used for Present / Timed in only / Absent)
+
+   rows: [{ key, student, time_in, time_out }]
+   mode: "present" | "timedin" | "absent"
+   ========================================================= */
+
+const MODE_BADGE = {
+  present: { label: "Present" },
+  timedin: { label: "No time out" },
+  absent: { label: "Absent" },
+};
+
+const IconCheckCircle = () => (
+  <Icon size={16}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="m8.5 12.5 2.5 2.5 4.5-5" />
+  </Icon>
+);
+
+const IconHourglass = () => (
+  <Icon size={16}>
+    <path d="M6 3h12M6 21h12" />
+    <path d="M7 3c0 5 3 6 5 9-2 3-5 4-5 9" />
+    <path d="M17 3c0 5-3 6-5 9 2 3 5 4 5 9" />
+  </Icon>
+);
+
+const IconUserX = () => (
+  <Icon size={16}>
+    <circle cx="9" cy="8" r="4" />
+    <path d="M2 21c0-4 3-7 7-7 1.5 0 2.8.4 3.9 1.2" />
+    <path d="m17 15 5 5M22 15l-5 5" />
+  </Icon>
+);
+
+const SECTION_ICON = {
+  present: IconCheckCircle,
+  timedin: IconHourglass,
+  absent: IconUserX,
+};
+
+function TimeCell({ value, empty }) {
+  if (!value) return <span className="hs-muted">{empty}</span>;
+  return <span className="hs-time">{formatTime(value)}</span>;
+}
+
+function HistorySection({ title, hint, mode, rows, emptyText, note }) {
+  const badge = MODE_BADGE[mode];
+  const showTimes = mode !== "absent";
+  const SectionIcon = SECTION_ICON[mode];
+
+  return (
+    <div className={`hs-sec hs-sec-${mode}`}>
+      <div className="hs-sec-head">
+        <span className="hs-sec-icon">
+          <SectionIcon />
+        </span>
+
+        <div className="hs-sec-text">
+          <div className="hs-sec-title">
+            <h4>{title}</h4>
+            <span className="hs-sec-count">{note ? "—" : rows.length}</span>
+          </div>
+          {hint && <p>{hint}</p>}
+        </div>
+      </div>
+
+      {note ? (
+        <div className="hs-sec-empty">{note}</div>
+      ) : rows.length === 0 ? (
+        <div className="hs-sec-empty">{emptyText}</div>
+      ) : (
+        <div className="hs-table-scroll">
+          <table className="hs-table">
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Year</th>
+                <th>Course and level</th>
+                {showTimes && <th>Time in</th>}
+                {showTimes && <th>Time out</th>}
+                <th>Status</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.key}>
+                  <td>
+                    <div className="hs-student">
+                      <span className="hs-student-avatar">
+                        {getInitials(row.student?.full_name)}
+                      </span>
+                      <span className="hs-student-text">
+                        <strong>{row.student?.full_name || "Unknown"}</strong>
+                        <small>{row.student?.student_id || "—"}</small>
+                      </span>
+                    </div>
+                  </td>
+
+                  <td>
+                    <span className="hs-year">
+                      {row.student?.year_level || "—"}
+                    </span>
+                  </td>
+
+                  <td>
+                    <span className="hs-chip">
+                      {row.student?.section || "—"}
+                    </span>
+                  </td>
+
+                  {showTimes && (
+                    <td>
+                      <TimeCell value={row.time_in} empty="—" />
+                    </td>
+                  )}
+                  {showTimes && (
+                    <td>
+                      <TimeCell value={row.time_out} empty="Not yet" />
+                    </td>
+                  )}
+
+                  <td>
+                    <span className={`hs-badge hs-badge-${mode}`}>
+                      <i />
+                      {badge.label}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* =========================================================
    COMPONENT
    ========================================================= */
@@ -193,13 +353,18 @@ const STATUS_LABEL = {
 function AdminSessionHistory() {
   const [user, setUser] = useState(null);
   const [programs, setPrograms] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [studentsReady, setStudentsReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
   const [yearFilter, setYearFilter] = useState("all");
-  const [expanded, setExpanded] = useState(() => new Set());
+
+  /* { [sessionId]: "present" | "timedin" | "absent" }
+     A session's panel is open only while it has an active tab. */
+  const [activeTab, setActiveTab] = useState({});
 
   const [toast, setToast] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -208,6 +373,7 @@ function AdminSessionHistory() {
   useEffect(() => {
     loadUser();
     loadPrograms();
+    loadStudents();
   }, []);
 
   useEffect(() => {
@@ -252,7 +418,44 @@ function AdminSessionHistory() {
     }
   }
 
-  /* Year levels actually present in the data (free text column) */
+  /* Full student list, used to work out who was absent.
+     Loaded in pages because Supabase returns at most 1000 rows per request. */
+  async function loadStudents() {
+    try {
+      const pageSize = 1000;
+      const all = [];
+      let from = 0;
+
+      while (true) {
+        const { data, error: studentsError } = await supabase
+          .from("students")
+          .select("id, student_id, full_name, year_level, section")
+          .order("id", { ascending: true })
+          .range(from, from + pageSize - 1);
+
+        if (studentsError) throw studentsError;
+
+        all.push(...(data || []));
+
+        if (!data || data.length < pageSize) break;
+
+        from += pageSize;
+      }
+
+      setStudents(all);
+      setStudentsReady(true);
+    } catch (err) {
+      console.error("Student list load error:", err);
+      setStudentsReady(false);
+    }
+  }
+
+  function refreshAll() {
+    loadPrograms();
+    loadStudents();
+  }
+
+  /* Year levels present in the data (free text column) */
   const yearOptions = useMemo(() => {
     const set = new Set();
     programs.forEach((p) =>
@@ -260,43 +463,121 @@ function AdminSessionHistory() {
         if (a.students?.year_level) set.add(a.students.year_level);
       })
     );
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [programs]);
+    students.forEach((s) => {
+      if (s.year_level) set.add(s.year_level);
+    });
+    return Array.from(set).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
+  }, [programs, students]);
 
   /* Search + year filter. Picking a year level keeps only that
-     year level's attendees inside each session. */
+     year level's students inside each session. */
   const visible = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
 
     return programs
       .map((p) => {
+        const status = effectiveStatus(p);
+
+        /* Absent students are only counted once the session has ended */
+        const sessionDone = status === "closed";
+
         const attendees = (p.attendance || [])
           .filter(
             (a) => yearFilter === "all" || a.students?.year_level === yearFilter
           )
           .sort((x, y) => new Date(x.time_in) - new Date(y.time_in));
-        return { ...p, _attendees: attendees };
+
+        /* Timed in and timed out */
+        const present = attendees
+          .filter((a) => a.time_out)
+          .sort((x, y) => byYearThenName(x.students, y.students));
+
+        /* Timed in, but no time out */
+        const timedInOnly = attendees
+          .filter((a) => a.time_in && !a.time_out)
+          .sort((x, y) => byYearThenName(x.students, y.students));
+
+        /* Absent = eligible for this session, but no attendance record.
+           Uses the session's FULL attendance list (not the year-filtered
+           one) so a student is never wrongly marked absent. */
+        let absent = [];
+
+        if (sessionDone && studentsReady) {
+          const attendedIds = new Set();
+          const attendedUsernames = new Set();
+
+          (p.attendance || []).forEach((a) => {
+            if (a.students?.id) attendedIds.add(a.students.id);
+            if (a.students?.student_id) {
+              attendedUsernames.add(a.students.student_id);
+            }
+          });
+
+          const allowed = new Set(
+            (p.allowed_year_levels || []).map(normalize)
+          );
+
+          absent = students
+            .filter(
+              (s) =>
+                (allowed.size === 0 || allowed.has(normalize(s.year_level))) &&
+                !attendedIds.has(s.id) &&
+                !attendedUsernames.has(s.student_id) &&
+                (yearFilter === "all" || s.year_level === yearFilter)
+            )
+            .sort(byYearThenName);
+        }
+
+        return {
+          ...p,
+          _status: status,
+          _sessionDone: sessionDone,
+          _attendees: attendees,
+          _present: present,
+          _timedInOnly: timedInOnly,
+          _absent: absent,
+        };
       })
       .filter((p) => {
+        const matchesStudent = (s) =>
+          (s?.full_name || "").toLowerCase().includes(search) ||
+          (s?.student_id || "").toLowerCase().includes(search);
+
         const matchesSearch =
           !search ||
           p.name.toLowerCase().includes(search) ||
-          p._attendees.some(
-            (a) =>
-              (a.students?.full_name || "").toLowerCase().includes(search) ||
-              (a.students?.student_id || "").toLowerCase().includes(search)
-          );
-        const matchesYear = yearFilter === "all" || p._attendees.length > 0;
+          p._attendees.some((a) => matchesStudent(a.students)) ||
+          p._absent.some((s) => matchesStudent(s));
+
+        const matchesYear =
+          yearFilter === "all" ||
+          p._attendees.length > 0 ||
+          p._absent.length > 0;
+
         return matchesSearch && matchesYear;
       });
-  }, [programs, searchTerm, yearFilter]);
+  }, [programs, students, studentsReady, searchTerm, yearFilter]);
 
   const totalAttendances = visible.reduce((n, p) => n + p._attendees.length, 0);
 
+  /* Chevron: open on Present, or close whatever is open */
   function toggle(id) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+    setActiveTab((prev) => {
+      const next = { ...prev };
+      if (next[id]) delete next[id];
+      else next[id] = "present";
+      return next;
+    });
+  }
+
+  /* Category button: open that list, or close it if it's already showing */
+  function selectTab(id, tab) {
+    setActiveTab((prev) => {
+      const next = { ...prev };
+      if (next[id] === tab) delete next[id];
+      else next[id] = tab;
       return next;
     });
   }
@@ -307,7 +588,9 @@ function AdminSessionHistory() {
       const y = a.students?.year_level || "Unspecified";
       counts[y] = (counts[y] || 0) + 1;
     });
-    return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
+    return Object.entries(counts).sort(([a], [b]) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    );
   }
 
   async function handleDeleteSession() {
@@ -335,60 +618,119 @@ function AdminSessionHistory() {
     }
   }
 
-  function exportCsv() {
-    const rows = [
+  /* =======================================================
+     EXCEL EXPORT (one session only)
+     Three sheets: Present, Timed in only, Absent.
+     Students are sorted by year level, then name.
+     ======================================================= */
+
+  function exportSession(p) {
+    const header = [
+      "Username",
+      "Student",
+      "Year Level",
+      "Course and Level",
+      "Time In",
+      "Time Out",
+      "Status",
+    ];
+
+    const info = [
+      ["Session", p.name],
+      ["Date", dateParts(p).full || p.program_date || ""],
       [
-        "Session",
-        "Session Date",
-        "Started",
-        "Ended",
-        "Allowed Year Levels",
-        "Username",
-        "Student",
-        "Year Level",
-        "Course and Level",
-        "Time In",
-        "Time Out",
-        "Status",
+        "Started / Ended",
+        `${formatDateTime(p.started_at)}${
+          p.closed_at ? ` to ${formatDateTime(p.closed_at)}` : " (still open)"
+        }`,
+      ],
+      [
+        "Allowed year levels",
+        p.allowed_year_levels?.length
+          ? p.allowed_year_levels.join(", ")
+          : "All year levels",
+      ],
+      [],
+    ];
+
+    const attendanceRow = (a, status) => [
+      a.students?.student_id || "",
+      a.students?.full_name || "",
+      a.students?.year_level || "",
+      a.students?.section || "",
+      formatDateTime(a.time_in),
+      a.time_out ? formatDateTime(a.time_out) : "",
+      status,
+    ];
+
+    const presentRows = p._present.map((a) => attendanceRow(a, "Present"));
+    const timedInRows = p._timedInOnly.map((a) =>
+      attendanceRow(a, "Timed in, no time out")
+    );
+    const absentRows = p._absent.map((s) => [
+      s.student_id || "",
+      s.full_name || "",
+      s.year_level || "",
+      s.section || "",
+      "",
+      "",
+      "Absent",
+    ]);
+
+    const absentNoteText = absentNote(p);
+
+    const sheets = [
+      ["Present", presentRows, "No student has completed time in and time out."],
+      ["Timed in only", timedInRows, "Everyone who timed in has also timed out."],
+      [
+        "Absent",
+        absentRows,
+        absentNoteText || "No absent students. Everyone eligible timed in.",
       ],
     ];
 
-    visible.forEach((p) => {
-      const base = [
-        p.name,
-        p.program_date || "",
-        formatDateTime(p.started_at),
-        p.closed_at ? formatDateTime(p.closed_at) : "",
-        p.allowed_year_levels?.length ? p.allowed_year_levels.join("; ") : "All",
-      ];
+    const widths = [
+      { wch: 16 },
+      { wch: 30 },
+      { wch: 12 },
+      { wch: 22 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 22 },
+    ];
 
-      if (p._attendees.length === 0) {
-        rows.push([...base, "", "", "", "", "", "", ""]);
-        return;
-      }
+    const workbook = XLSX.utils.book_new();
 
-      p._attendees.forEach((a) => {
-        rows.push([
-          ...base,
-          a.students?.student_id || "",
-          a.students?.full_name || "",
-          a.students?.year_level || "",
-          a.students?.section || "",
-          formatDateTime(a.time_in),
-          a.time_out ? formatDateTime(a.time_out) : "",
-          a.status === "present" ? "Present" : "Timed in",
-        ]);
-      });
+    sheets.forEach(([name, rows, emptyMessage]) => {
+      const body = rows.length ? rows : [[emptyMessage]];
+      const sheet = XLSX.utils.aoa_to_sheet([...info, header, ...body]);
+      sheet["!cols"] = widths;
+      XLSX.utils.book_append_sheet(workbook, sheet, name);
     });
 
-    const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "session-history.csv";
-    link.click();
-    URL.revokeObjectURL(url);
+    const safeName =
+      String(p.name || "session")
+        .replace(/[^\w\- ]+/g, "")
+        .trim()
+        .replace(/\s+/g, "-") || "session";
+
+    const datePart = (p.program_date || p.started_at || "").slice(0, 10);
+
+    XLSX.writeFile(
+      workbook,
+      `${safeName}${datePart ? `-${datePart}` : ""}.xlsx`
+    );
+  }
+
+  /* Text shown in the Absent section when it can't list anyone yet */
+  function absentNote(p) {
+    if (!p._sessionDone) {
+      return "Absent students will appear once this session has ended.";
+    }
+    if (!studentsReady) {
+      return "Couldn't load the student list. Tap refresh to try again.";
+    }
+    return "";
   }
 
   /* =======================================================
@@ -413,16 +755,6 @@ function AdminSessionHistory() {
               <h1>Session History</h1>
               <p>Every session you've started, with the students who attended.</p>
             </div>
-
-            <button
-              className="primary-button"
-              type="button"
-              onClick={exportCsv}
-              disabled={visible.length === 0}
-            >
-              <IconDownload />
-              Export CSV
-            </button>
           </div>
 
           {toast && (
@@ -480,14 +812,17 @@ function AdminSessionHistory() {
             <div className="attendance-card-header">
               <div>
                 <h2>Session Log</h2>
-                <p>Select a session to see who attended.</p>
+                <p>
+                  Use the Present, Timed in only and Absent buttons on each
+                  session to see who is in each group.
+                </p>
               </div>
 
               <div className="attendance-card-actions">
                 <button
                   className="refresh-button"
                   type="button"
-                  onClick={loadPrograms}
+                  onClick={refreshAll}
                   disabled={refreshing}
                   title="Refresh"
                 >
@@ -541,9 +876,10 @@ function AdminSessionHistory() {
                 </div>
               ) : (
                 visible.map((p) => {
-                  const isOpen = expanded.has(p.id);
+                  const tab = activeTab[p.id];
+                  const isOpen = Boolean(tab);
                   const attendees = p._attendees;
-                  const status = effectiveStatus(p);
+                  const status = p._status;
                   const date = dateParts(p);
                   const duration = formatDuration(p.started_at, p.closed_at);
                   const breakdown = yearBreakdown(attendees);
@@ -551,6 +887,25 @@ function AdminSessionHistory() {
                     ? p.allowed_year_levels.join(", ")
                     : "All year levels";
                   const canDelete = status !== "open";
+                  const absentNoteText = absentNote(p);
+
+                  const tabs = [
+                    {
+                      id: "present",
+                      label: "Present",
+                      count: p._present.length,
+                    },
+                    {
+                      id: "timedin",
+                      label: "Timed in only",
+                      count: p._timedInOnly.length,
+                    },
+                    {
+                      id: "absent",
+                      label: "Absent",
+                      count: absentNoteText ? "—" : p._absent.length,
+                    },
+                  ];
 
                   return (
                     <article
@@ -693,79 +1048,83 @@ function AdminSessionHistory() {
                         </div>
                       )}
 
+                      {/* CATEGORY BUTTONS (on every session) */}
+                      <div className="hs-tabs" role="tablist">
+                        {tabs.map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={tab === t.id}
+                            className={`hs-tab hs-tab-${t.id}${
+                              tab === t.id ? " active" : ""
+                            }`}
+                            onClick={() => selectTab(p.id, t.id)}
+                          >
+                            {t.label}
+                            <span className="hs-tab-count">{t.count}</span>
+                          </button>
+                        ))}
+
+                        <button
+                          type="button"
+                          className="hs-tab-export"
+                          onClick={() => exportSession(p)}
+                          title="Download this session as an Excel file"
+                        >
+                          <IconDownload />
+                          Export Excel
+                        </button>
+                      </div>
+
                       <div className="hs-panel">
                         <div className="hs-panel-inner">
-                          {attendees.length === 0 ? (
-                            <div className="history-empty small">
-                              No students attended this session.
-                            </div>
-                          ) : (
-                            <div className="attendance-table-wrapper history-table-wrapper">
-                              <table className="attendance-table">
-                                <thead>
-                                  <tr>
-                                    <th className="student-heading">STUDENT</th>
-                                    <th>USERNAME</th>
-                                    <th>YEAR</th>
-                                    <th>COURSE AND LEVEL</th>
-                                    <th>TIME IN</th>
-                                    <th>TIME OUT</th>
-                                    <th>STATUS</th>
-                                  </tr>
-                                </thead>
+                          {tab === "present" && (
+                            <HistorySection
+                              mode="present"
+                              title="Present"
+                              hint="Timed in and timed out, sorted by year level."
+                              rows={p._present.map((a) => ({
+                                key: a.id,
+                                student: a.students,
+                                time_in: a.time_in,
+                                time_out: a.time_out,
+                              }))}
+                              emptyText="No student has completed time in and time out."
+                            />
+                          )}
 
-                                <tbody>
-                                  {attendees.map((a) => (
-                                    <tr key={a.id}>
-                                      <td className="student-column">
-                                        <div className="student-cell">
-                                          <div className="student-avatar">
-                                            {getInitials(a.students?.full_name)}
-                                          </div>
-                                          <div className="student-details">
-                                            <span className="student-name">
-                                              {a.students?.full_name ||
-                                                "Unknown"}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      </td>
+                          {tab === "timedin" && (
+                            <HistorySection
+                              mode="timedin"
+                              title="Timed in only"
+                              hint={
+                                p._sessionDone
+                                  ? "Timed in but never timed out."
+                                  : "Timed in and still inside. They haven't timed out yet."
+                              }
+                              rows={p._timedInOnly.map((a) => ({
+                                key: a.id,
+                                student: a.students,
+                                time_in: a.time_in,
+                                time_out: a.time_out,
+                              }))}
+                              emptyText="Everyone who timed in has also timed out."
+                            />
+                          )}
 
-                                      <td>
-                                        <span className="student-id">
-                                          {a.students?.student_id || "—"}
-                                        </span>
-                                      </td>
-
-                                      <td>{a.students?.year_level || "—"}</td>
-
-                                      <td>
-                                        <span className="section-badge">
-                                          {a.students?.section || "—"}
-                                        </span>
-                                      </td>
-
-                                      <td>{formatTime(a.time_in)}</td>
-                                      <td>{formatTime(a.time_out)}</td>
-
-                                      <td>
-                                        <span
-                                          className={`history-badge ${
-                                            a.status === "present"
-                                              ? "status-open"
-                                              : "status-expired"
-                                          }`}
-                                        >
-                                          {a.status === "present"
-                                            ? "Present"
-                                            : "Timed in"}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
+                          {tab === "absent" && (
+                            <HistorySection
+                              mode="absent"
+                              title="Absent"
+                              hint="Eligible students who never timed in, sorted by year level."
+                              rows={p._absent.map((s) => ({
+                                key: s.id || s.student_id,
+                                student: s,
+                              }))}
+                              note={absentNoteText}
+                              emptyText="No absent students. Everyone eligible timed in."
+                            />
                           )}
                         </div>
                       </div>
