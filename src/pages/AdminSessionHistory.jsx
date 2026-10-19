@@ -6,30 +6,11 @@ import "./admin-dashboard.css";
 import "./admin-students.css";
 import "./AdminSessionHistory.css";
 
-/* =========================================================
-   ADMIN SESSION HISTORY
-
-   Reads from:
-     attendance_programs  -> sessions the admin started/ended
-     attendance           -> linked by attendance.program_id
-     students             -> student_id, full_name, year_level, section
-
-   Every session has three buttons (Present / Timed in only / Absent).
-   Clicking one opens that session's list; clicking it again closes it.
-
-     1. Present        -> timed in AND timed out
-     2. Timed in only  -> timed in, but never timed out
-     3. Absent         -> eligible students with no attendance at all.
-                          Only filled in AFTER the session has ended.
-
-   Excel export has one sheet per category, sorted by year level.
-
-   Attendance recorded BEFORE the Start/End Session feature has
-   program_id = null, so it doesn't belong to any session and
-   won't appear here.
-   ========================================================= */
 
 const TZ = "Asia/Manila";
+
+/* Storage bucket holding the time in / time out photos */
+const PHOTO_BUCKET = "attendance-photos";
 
 /* Shades used for the year-level breakdown bar */
 const BAR_SHADES = ["#e8946a", "#f2b18a", "#ffc99e", "#d9b8a0", "#c9a58b"];
@@ -188,7 +169,7 @@ function effectiveStatus(p) {
 
 const STATUS_LABEL = {
   open: "Open now",
-  expired: "Deadline passed",
+  expired: "Ended · deadline passed",
   closed: "Ended",
 };
 
@@ -408,7 +389,34 @@ function AdminSessionHistory() {
 
       if (programsError) throw programsError;
 
-      setPrograms(data || []);
+      let rows = data || [];
+
+      /* Auto-end any session whose deadline has passed */
+      const now = new Date();
+      const expired = rows.filter(
+        (p) => p.status === "open" && p.deadline && new Date(p.deadline) < now
+      );
+
+      if (expired.length) {
+        await Promise.all(
+          expired.map((p) =>
+            supabase
+              .from("attendance_programs")
+              .update({ status: "closed", closed_at: p.deadline })
+              .eq("id", p.id)
+              .eq("status", "open")
+          )
+        );
+
+        const expiredIds = new Set(expired.map((p) => p.id));
+        rows = rows.map((p) =>
+          expiredIds.has(p.id)
+            ? { ...p, status: "closed", closed_at: p.deadline }
+            : p
+        );
+      }
+
+      setPrograms(rows);
     } catch (err) {
       console.error("Session history load error:", err);
       setError(err?.message || "Unable to load session history.");
@@ -480,8 +488,9 @@ function AdminSessionHistory() {
       .map((p) => {
         const status = effectiveStatus(p);
 
-        /* Absent students are only counted once the session has ended */
-        const sessionDone = status === "closed";
+        /* Absent students are counted once the session has ended,
+           either manually closed or because its deadline passed */
+        const sessionDone = status === "closed" || status === "expired";
 
         const attendees = (p.attendance || [])
           .filter(
@@ -599,7 +608,7 @@ function AdminSessionHistory() {
     setDeleting(true);
 
     try {
-      const { error: deleteError } = await supabase.rpc(
+      const { data: result, error: deleteError } = await supabase.rpc(
         "delete_attendance_program",
         { p_program_id: deleteTarget.id }
       );
@@ -607,7 +616,41 @@ function AdminSessionHistory() {
       if (deleteError) throw deleteError;
 
       setPrograms((prev) => prev.filter((p) => p.id !== deleteTarget.id));
-      setToast(`"${deleteTarget.name}" was deleted.`);
+
+      /* Remove this session's photos from Storage.
+         The database function returns the photo paths it just unlinked;
+         direct SQL deletes on storage are blocked, so this goes through
+         the Storage API. */
+      const photoPaths = result?.photo_paths || [];
+      let photosRemoved = 0;
+
+      for (let i = 0; i < photoPaths.length; i += 100) {
+        const { data: removed, error: removeError } = await supabase.storage
+          .from(PHOTO_BUCKET)
+          .remove(photoPaths.slice(i, i + 100));
+
+        if (removeError) {
+          console.error("Photo cleanup error:", removeError);
+        } else {
+          photosRemoved += removed?.length || 0;
+        }
+      }
+
+      const photosLeft = photoPaths.length - photosRemoved;
+
+      setToast(
+        photosLeft > 0
+          ? `"${deleteTarget.name}" was deleted, but ${photosLeft} photo${
+              photosLeft === 1 ? "" : "s"
+            } could not be removed from storage.`
+          : `"${deleteTarget.name}" was deleted${
+              photosRemoved
+                ? ` along with ${photosRemoved} photo${
+                    photosRemoved === 1 ? "" : "s"
+                  }`
+                : ""
+            }.`
+      );
       setDeleteTarget(null);
     } catch (err) {
       console.error("Delete session error:", err);
@@ -1164,7 +1207,8 @@ function AdminSessionHistory() {
               This permanently deletes the session and all{" "}
               {(deleteTarget.attendance || []).length} attendance record
               {(deleteTarget.attendance || []).length === 1 ? "" : "s"} linked
-              to it from the database. This can't be undone.
+              to it from the database, along with that session's time in and
+              time out photos in storage. This can't be undone.
             </p>
 
             <div className="reset-modal-actions">
