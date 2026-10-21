@@ -12,9 +12,13 @@ const TZ = "Asia/Manila";
 const PHOTO_BUCKET = "attendance-photos";
 
 /* Excel export: photos are shrunk to this size (longest side, in pixels)
-   before they are embedded. Staff can still save them from the sheet. */
+   before they are embedded. The original full-quality photos can be saved
+   with the Download links next to the embedded pictures. */
 const PHOTO_MAX_SIDE = 800;
 const PHOTO_JPEG_QUALITY = 0.85;
+
+/* How long the photo download links inside the Excel file keep working (seconds) */
+const PHOTO_LINK_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 /* How many photos are downloaded at the same time */
 const PHOTO_DOWNLOAD_LIMIT = 4;
@@ -276,6 +280,32 @@ async function fetchPhoto(path) {
     console.error("Photo export error:", path, err);
     return null;
   }
+}
+
+/* Makes download links for the original photos, so anyone who has the
+   Excel file can save them without logging in.
+   Returns a Map of photo path -> link. */
+async function getPhotoLinks(paths) {
+  const links = new Map();
+
+  for (let i = 0; i < paths.length; i += 100) {
+    const { data, error } = await supabase.storage
+      .from(PHOTO_BUCKET)
+      .createSignedUrls(paths.slice(i, i + 100), PHOTO_LINK_SECONDS, {
+        download: true,
+      });
+
+    if (error) {
+      console.error("Photo link error:", error);
+      continue;
+    }
+
+    (data || []).forEach((item) => {
+      if (item.signedUrl && !item.error) links.set(item.path, item.signedUrl);
+    });
+  }
+
+  return links;
 }
 
 /* Runs worker(item) over items, a few at a time */
@@ -790,7 +820,9 @@ function AdminSessionHistory() {
      Three sheets: Present, Timed in only, Absent.
      Students are sorted by year level, then name.
      Present and Timed in only also get Time In Photo and
-     Time Out Photo columns with the pictures embedded.
+     Time Out Photo columns with the pictures embedded, plus
+     Save Time In Photo / Save Time Out Photo columns with
+     links to the original full-quality photos.
      Photos are downloaded with the logged-in admin's session.
      ======================================================= */
 
@@ -829,6 +861,9 @@ function AdminSessionHistory() {
 
       const photosFailed = paths.length - photos.size;
 
+      /* Links to the original photos, so students can save them */
+      const photoLinks = await getPhotoLinks(paths);
+
       /* ---- Sheet content ---- */
 
       const header = [
@@ -841,7 +876,12 @@ function AdminSessionHistory() {
         "Status",
       ];
 
-      const photoHeader = ["Time In Photo", "Time Out Photo"];
+      const photoHeader = [
+        "Time In Photo",
+        "Time Out Photo",
+        "Save Time In Photo",
+        "Save Time Out Photo",
+      ];
 
       const info = [
         ["Session", p.name],
@@ -919,7 +959,7 @@ function AdminSessionHistory() {
       ];
 
       const widths = [16, 30, 12, 22, 18, 18, 22];
-      const photoWidths = [20, 20];
+      const photoWidths = [20, 20, 18, 18];
 
       /* ---- Build the workbook ---- */
 
@@ -1061,6 +1101,20 @@ function AdminSessionHistory() {
           });
 
           if (hasPhoto) row.height = PHOTO_ROW_HEIGHT;
+
+          /* "Download" links to the original full-quality photos.
+             Columns 10 and 11 (after the two embedded photo columns). */
+          [
+            [item.inPath, 10],
+            [item.outPath, 11],
+          ].forEach(([path, col]) => {
+            const url = path ? photoLinks.get(path) : null;
+            if (!url) return;
+
+            const cell = row.getCell(col);
+            cell.value = { text: "Download", hyperlink: url };
+            cell.font = { color: { argb: "FF0563C1" }, underline: true };
+          });
         });
       });
 
