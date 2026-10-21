@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabase";
 import AdminSidebar from "./AdminSidebar";
 import "./admin-dashboard.css";
@@ -12,8 +11,51 @@ const TZ = "Asia/Manila";
 /* Storage bucket holding the time in / time out photos */
 const PHOTO_BUCKET = "attendance-photos";
 
+/* Excel export: photos are shrunk to this size (longest side, in pixels)
+   before they are embedded. Staff can still save them from the sheet. */
+const PHOTO_MAX_SIDE = 800;
+const PHOTO_JPEG_QUALITY = 0.85;
+
+/* How many photos are downloaded at the same time */
+const PHOTO_DOWNLOAD_LIMIT = 4;
+
+/* Size of each photo as shown inside its cell (pixels), and row height (points) */
+const PHOTO_BOX_W = 135;
+const PHOTO_BOX_H = 120;
+const PHOTO_ROW_HEIGHT = 94;
+
 /* Shades used for the year-level breakdown bar */
 const BAR_SHADES = ["#e8946a", "#f2b18a", "#ffc99e", "#d9b8a0", "#c9a58b"];
+
+/* Excel export colors (ARGB). Warm orange to match the dashboard. */
+const EXPORT_COLORS = {
+  dark: "FF5A3A28",
+  soft: "FFF9E3D4",
+  zebra: "FFFFF7F1",
+  line: "FFE6D5C8",
+  head: "FFD9743F",
+};
+
+/* Tab color + status cell colors for each sheet */
+const EXPORT_TONES = {
+  present: { tab: "FF2E9E5B", statusFill: "FFE3F4E7", statusText: "FF1E7B3A" },
+  timedin: { tab: "FFE0A020", statusFill: "FFFFF1D6", statusText: "FF8A5A00" },
+  absent: { tab: "FFD64545", statusFill: "FFFDE4E4", statusText: "FFB42318" },
+};
+
+const solidFill = (argb) => ({
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb },
+});
+
+const thinSide = { style: "thin", color: { argb: EXPORT_COLORS.line } };
+const thinBorder = {
+  top: thinSide,
+  left: thinSide,
+  bottom: thinSide,
+  right: thinSide,
+};
 
 /* =========================================================
    ICONS (inline SVG, inherits currentColor)
@@ -188,6 +230,84 @@ function byYearThenName(a, b) {
 }
 
 /* =========================================================
+   EXPORT HELPERS (photos)
+   ========================================================= */
+
+/* Shrinks a photo so the Excel file stays a reasonable size.
+   Returns a JPEG data URL plus the new width and height. */
+async function shrinkPhoto(blob) {
+  const bitmap = await createImageBitmap(blob);
+
+  const scale = Math.min(
+    1,
+    PHOTO_MAX_SIDE / Math.max(bitmap.width, bitmap.height)
+  );
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+
+  if (typeof bitmap.close === "function") bitmap.close();
+
+  return {
+    base64: canvas.toDataURL("image/jpeg", PHOTO_JPEG_QUALITY),
+    width,
+    height,
+  };
+}
+
+/* Downloads one photo from the private bucket using the admin's session.
+   Returns null if it can't be downloaded. */
+async function fetchPhoto(path) {
+  try {
+    const { data, error } = await supabase.storage
+      .from(PHOTO_BUCKET)
+      .download(path);
+
+    if (error || !data) throw error || new Error("Empty download");
+
+    return await shrinkPhoto(data);
+  } catch (err) {
+    console.error("Photo export error:", path, err);
+    return null;
+  }
+}
+
+/* Runs worker(item) over items, a few at a time */
+async function runPool(items, limit, worker) {
+  let next = 0;
+
+  const runners = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (next < items.length) {
+        const item = items[next];
+        next += 1;
+        await worker(item);
+      }
+    }
+  );
+
+  await Promise.all(runners);
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+/* =========================================================
    SECTION TABLE (used for Present / Timed in only / Absent)
 
    rows: [{ key, student, time_in, time_out }]
@@ -351,6 +471,9 @@ function AdminSessionHistory() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
+  /* { id, done, total } while an Excel export is running, otherwise null */
+  const [exporting, setExporting] = useState(null);
+
   useEffect(() => {
     loadUser();
     loadPrograms();
@@ -382,6 +505,7 @@ function AdminSessionHistory() {
            status, started_at, closed_at,
            attendance (
              id, session_number, time_in, time_out, status,
+             time_in_photo_path, time_out_photo_path,
              students ( id, student_id, full_name, year_level, section )
            )`
         )
@@ -665,104 +789,314 @@ function AdminSessionHistory() {
      EXCEL EXPORT (one session only)
      Three sheets: Present, Timed in only, Absent.
      Students are sorted by year level, then name.
+     Present and Timed in only also get Time In Photo and
+     Time Out Photo columns with the pictures embedded.
+     Photos are downloaded with the logged-in admin's session.
      ======================================================= */
 
-  function exportSession(p) {
-    const header = [
-      "Username",
-      "Student",
-      "Year Level",
-      "Course and Level",
-      "Time In",
-      "Time Out",
-      "Status",
-    ];
+  async function exportSession(p) {
+    if (exporting) return;
 
-    const info = [
-      ["Session", p.name],
-      ["Date", dateParts(p).full || p.program_date || ""],
-      [
-        "Started / Ended",
-        `${formatDateTime(p.started_at)}${
-          p.closed_at ? ` to ${formatDateTime(p.closed_at)}` : " (still open)"
-        }`,
-      ],
-      [
-        "Allowed year levels",
-        p.allowed_year_levels?.length
-          ? p.allowed_year_levels.join(", ")
-          : "All year levels",
-      ],
-      [],
-    ];
+    setError("");
 
-    const attendanceRow = (a, status) => [
-      a.students?.student_id || "",
-      a.students?.full_name || "",
-      a.students?.year_level || "",
-      a.students?.section || "",
-      formatDateTime(a.time_in),
-      a.time_out ? formatDateTime(a.time_out) : "",
-      status,
-    ];
+    try {
+      /* Every photo path this export needs, each downloaded once */
+      const photoRows = [...p._present, ...p._timedInOnly];
+      const paths = Array.from(
+        new Set(
+          photoRows
+            .flatMap((a) => [a.time_in_photo_path, a.time_out_photo_path])
+            .filter(Boolean)
+        )
+      );
 
-    const presentRows = p._present.map((a) => attendanceRow(a, "Present"));
-    const timedInRows = p._timedInOnly.map((a) =>
-      attendanceRow(a, "Timed in, no time out")
-    );
-    const absentRows = p._absent.map((s) => [
-      s.student_id || "",
-      s.full_name || "",
-      s.year_level || "",
-      s.section || "",
-      "",
-      "",
-      "Absent",
-    ]);
+      setExporting({ id: p.id, done: 0, total: paths.length });
 
-    const absentNoteText = absentNote(p);
+      /* Loaded on demand so exceljs only downloads when someone exports */
+      const excelModule = await import("exceljs");
+      const ExcelJS = excelModule.default || excelModule;
 
-    const sheets = [
-      ["Present", presentRows, "No student has completed time in and time out."],
-      ["Timed in only", timedInRows, "Everyone who timed in has also timed out."],
-      [
-        "Absent",
-        absentRows,
-        absentNoteText || "No absent students. Everyone eligible timed in.",
-      ],
-    ];
+      /* Download + shrink the photos, a few at a time */
+      const photos = new Map();
+      let done = 0;
 
-    const widths = [
-      { wch: 16 },
-      { wch: 30 },
-      { wch: 12 },
-      { wch: 22 },
-      { wch: 18 },
-      { wch: 18 },
-      { wch: 22 },
-    ];
+      await runPool(paths, PHOTO_DOWNLOAD_LIMIT, async (path) => {
+        const photo = await fetchPhoto(path);
+        if (photo) photos.set(path, photo);
+        done += 1;
+        setExporting({ id: p.id, done, total: paths.length });
+      });
 
-    const workbook = XLSX.utils.book_new();
+      const photosFailed = paths.length - photos.size;
 
-    sheets.forEach(([name, rows, emptyMessage]) => {
-      const body = rows.length ? rows : [[emptyMessage]];
-      const sheet = XLSX.utils.aoa_to_sheet([...info, header, ...body]);
-      sheet["!cols"] = widths;
-      XLSX.utils.book_append_sheet(workbook, sheet, name);
-    });
+      /* ---- Sheet content ---- */
 
-    const safeName =
-      String(p.name || "session")
-        .replace(/[^\w\- ]+/g, "")
-        .trim()
-        .replace(/\s+/g, "-") || "session";
+      const header = [
+        "Username",
+        "Student",
+        "Year Level",
+        "Course and Level",
+        "Time In",
+        "Time Out",
+        "Status",
+      ];
 
-    const datePart = (p.program_date || p.started_at || "").slice(0, 10);
+      const photoHeader = ["Time In Photo", "Time Out Photo"];
 
-    XLSX.writeFile(
-      workbook,
-      `${safeName}${datePart ? `-${datePart}` : ""}.xlsx`
-    );
+      const info = [
+        ["Session", p.name],
+        ["Date", dateParts(p).full || p.program_date || ""],
+        [
+          "Started / Ended",
+          `${formatDateTime(p.started_at)}${
+            p.closed_at ? ` to ${formatDateTime(p.closed_at)}` : " (still open)"
+          }`,
+        ],
+        [
+          "Allowed year levels",
+          p.allowed_year_levels?.length
+            ? p.allowed_year_levels.join(", ")
+            : "All year levels",
+        ],
+        [],
+      ];
+
+      const attendanceRow = (a, status) => ({
+        cells: [
+          a.students?.student_id || "",
+          a.students?.full_name || "",
+          a.students?.year_level || "",
+          a.students?.section || "",
+          formatDateTime(a.time_in),
+          a.time_out ? formatDateTime(a.time_out) : "",
+          status,
+        ],
+        inPath: a.time_in_photo_path || "",
+        outPath: a.time_out_photo_path || "",
+      });
+
+      const presentRows = p._present.map((a) => attendanceRow(a, "Present"));
+      const timedInRows = p._timedInOnly.map((a) =>
+        attendanceRow(a, "Timed in, no time out")
+      );
+      const absentRows = p._absent.map((s) => ({
+        cells: [
+          s.student_id || "",
+          s.full_name || "",
+          s.year_level || "",
+          s.section || "",
+          "",
+          "",
+          "Absent",
+        ],
+      }));
+
+      const absentNoteText = absentNote(p);
+
+      const sheets = [
+        {
+          name: "Present",
+          rows: presentRows,
+          emptyMessage: "No student has completed time in and time out.",
+          withPhotos: true,
+          tone: "present",
+        },
+        {
+          name: "Timed in only",
+          rows: timedInRows,
+          emptyMessage: "Everyone who timed in has also timed out.",
+          withPhotos: true,
+          tone: "timedin",
+        },
+        {
+          name: "Absent",
+          rows: absentRows,
+          emptyMessage:
+            absentNoteText || "No absent students. Everyone eligible timed in.",
+          withPhotos: false,
+          tone: "absent",
+        },
+      ];
+
+      const widths = [16, 30, 12, 22, 18, 18, 22];
+      const photoWidths = [20, 20];
+
+      /* ---- Build the workbook ---- */
+
+      const workbook = new ExcelJS.Workbook();
+      workbook.creator = "FON Supreme Student Council";
+      workbook.created = new Date();
+
+      /* One embedded image per photo path, reused if it appears twice */
+      const imageIds = new Map();
+
+      const getImageId = (path, photo) => {
+        if (!imageIds.has(path)) {
+          imageIds.set(
+            path,
+            workbook.addImage({ base64: photo.base64, extension: "jpeg" })
+          );
+        }
+        return imageIds.get(path);
+      };
+
+      sheets.forEach(({ name, rows, emptyMessage, withPhotos, tone }) => {
+        const colors = EXPORT_TONES[tone];
+
+        const sheet = workbook.addWorksheet(name, {
+          properties: { tabColor: { argb: colors.tab } },
+        });
+
+        const columnCount = withPhotos
+          ? header.length + photoHeader.length
+          : header.length;
+
+        sheet.columns = (withPhotos ? [...widths, ...photoWidths] : widths).map(
+          (width) => ({ width })
+        );
+
+        /* Session details block: peach label cells, value across the row */
+        info.forEach((line) => {
+          const infoRow = sheet.addRow(line);
+          if (line.length === 0) return;
+
+          infoRow.height = 20;
+
+          const label = infoRow.getCell(1);
+          label.font = { bold: true, color: { argb: EXPORT_COLORS.dark } };
+          label.fill = solidFill(EXPORT_COLORS.soft);
+          label.border = thinBorder;
+          label.alignment = { vertical: "middle" };
+
+          sheet.mergeCells(infoRow.number, 2, infoRow.number, columnCount);
+
+          const value = infoRow.getCell(2);
+          value.font = { color: { argb: EXPORT_COLORS.dark } };
+          value.alignment = { vertical: "middle", horizontal: "left" };
+        });
+
+        /* Column headers: solid orange with white text */
+        const headerRow = sheet.addRow(
+          withPhotos ? [...header, ...photoHeader] : header
+        );
+        headerRow.height = 26;
+        headerRow.eachCell((cell) => {
+          cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+          cell.fill = solidFill(EXPORT_COLORS.head);
+          cell.border = thinBorder;
+          cell.alignment = {
+            vertical: "middle",
+            horizontal: "center",
+            wrapText: true,
+          };
+        });
+
+        /* Keep the header visible while scrolling, and allow filtering */
+        sheet.views = [{ state: "frozen", ySplit: headerRow.number }];
+        sheet.autoFilter = {
+          from: { row: headerRow.number, column: 1 },
+          to: { row: headerRow.number, column: columnCount },
+        };
+
+        if (rows.length === 0) {
+          const emptyRow = sheet.addRow([emptyMessage]);
+          sheet.mergeCells(emptyRow.number, 1, emptyRow.number, columnCount);
+
+          const emptyCell = emptyRow.getCell(1);
+          emptyCell.font = { italic: true, color: { argb: "FF7A6A60" } };
+          emptyCell.fill = solidFill(EXPORT_COLORS.zebra);
+          emptyCell.alignment = { vertical: "middle", horizontal: "center" };
+
+          emptyRow.height = 30;
+          return;
+        }
+
+        rows.forEach((item, index) => {
+          const row = sheet.addRow(item.cells);
+          row.height = 22;
+
+          /* Borders, alignment and alternating row shading */
+          for (let col = 1; col <= columnCount; col += 1) {
+            const cell = row.getCell(col);
+            cell.border = thinBorder;
+            cell.alignment = {
+              vertical: "middle",
+              horizontal: col >= 3 ? "center" : "left",
+              wrapText: true,
+            };
+            if (index % 2 === 1) cell.fill = solidFill(EXPORT_COLORS.zebra);
+          }
+
+          /* Status cell: green, amber or red depending on the sheet */
+          const statusCell = row.getCell(7);
+          statusCell.font = { bold: true, color: { argb: colors.statusText } };
+          statusCell.fill = solidFill(colors.statusFill);
+
+          if (!withPhotos) return;
+
+          let hasPhoto = false;
+
+          [
+            [item.inPath, item.cells.length],
+            [item.outPath, item.cells.length + 1],
+          ].forEach(([path, colIndex]) => {
+            const photo = path ? photos.get(path) : null;
+            if (!photo) return;
+
+            const scale = Math.min(
+              PHOTO_BOX_W / photo.width,
+              PHOTO_BOX_H / photo.height
+            );
+
+            sheet.addImage(getImageId(path, photo), {
+              tl: { col: colIndex + 0.05, row: row.number - 1 + 0.05 },
+              ext: {
+                width: Math.round(photo.width * scale),
+                height: Math.round(photo.height * scale),
+              },
+              editAs: "oneCell",
+            });
+
+            hasPhoto = true;
+          });
+
+          if (hasPhoto) row.height = PHOTO_ROW_HEIGHT;
+        });
+      });
+
+      /* ---- Save the file ---- */
+
+      const buffer = await workbook.xlsx.writeBuffer();
+
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+
+      const safeName =
+        String(p.name || "session")
+          .replace(/[^\w\- ]+/g, "")
+          .trim()
+          .replace(/\s+/g, "-") || "session";
+
+      const datePart = (p.program_date || p.started_at || "").slice(0, 10);
+
+      saveBlob(blob, `${safeName}${datePart ? `-${datePart}` : ""}.xlsx`);
+
+      setToast(
+        photosFailed > 0
+          ? `Exported "${p.name}", but ${photosFailed} photo${
+              photosFailed === 1 ? "" : "s"
+            } could not be downloaded and ${
+              photosFailed === 1 ? "was" : "were"
+            } left blank.`
+          : `Exported "${p.name}".`
+      );
+    } catch (err) {
+      console.error("Export error:", err);
+      setError(err?.message || "Unable to export this session.");
+    } finally {
+      setExporting(null);
+    }
   }
 
   /* Text shown in the Absent section when it can't list anyone yet */
@@ -931,6 +1265,7 @@ function AdminSessionHistory() {
                     : "All year levels";
                   const canDelete = status !== "open";
                   const absentNoteText = absentNote(p);
+                  const isExporting = exporting?.id === p.id;
 
                   const tabs = [
                     {
@@ -1113,10 +1448,15 @@ function AdminSessionHistory() {
                           type="button"
                           className="hs-tab-export"
                           onClick={() => exportSession(p)}
-                          title="Download this session as an Excel file"
+                          disabled={Boolean(exporting)}
+                          title="Download this session as an Excel file, with photos"
                         >
                           <IconDownload />
-                          Export Excel
+                          {isExporting
+                            ? exporting.total > 0
+                              ? `Exporting ${exporting.done}/${exporting.total} photos...`
+                              : "Exporting..."
+                            : "Export Excel"}
                         </button>
                       </div>
 
